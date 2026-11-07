@@ -24,6 +24,8 @@ import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
 
@@ -35,16 +37,13 @@ public class MainActivity extends Activity {
     private ImageView staticWallpaper;
     private TextView statusText;
     private TextView titleView;
-    private LinearLayout panelLeft, panelRight;
-    private LinearLayout columns;
-    private LinearLayout glassContainer;
-
+    private LinearLayout panelLeft, panelRight, columns, glassContainer;
     private boolean isTabletMode = false;
     private int currentMode = Scheduler.MODE_BALANCE;
-
     private final Handler h = new Handler(Looper.getMainLooper());
+    private final ExecutorService pool = Executors.newSingleThreadExecutor();
+    private volatile boolean refreshing = false;
     private Runnable ticker;
-
     private SharedPreferences sp;
 
     @Override
@@ -53,9 +52,7 @@ public class MainActivity extends Activity {
         getWindow().setFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-
         sp = getSharedPreferences(Scheduler.PREFS, MODE_PRIVATE);
-
         root = new FrameLayout(this);
         setContentView(root);
 
@@ -71,11 +68,11 @@ public class MainActivity extends Activity {
 
         ticker = new Runnable() {
             @Override public void run() {
-                refreshStatus();
-                h.postDelayed(this, 1500);
+                refreshStatusAsync();
+                h.postDelayed(this, 4000);
             }
         };
-        h.post(ticker);
+        h.postDelayed(ticker, 600);
 
         String mode = sp.getString("bg_mode", "dynamic");
         if ("static".equals(mode)) {
@@ -87,10 +84,6 @@ public class MainActivity extends Activity {
                     bgView.setVisibility(View.GONE);
                 } catch (Exception ignored) {}
             }
-        }
-
-        if (!Scheduler.isRoot()) {
-            Toast.makeText(this, "需要 Root 权限才能应用调度", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -161,18 +154,19 @@ public class MainActivity extends Activity {
         addGlassButton(panelRight, "刷新网络", v -> quick("echo 1 > /proc/sys/net/ipv4/tcp_fastopen 2>/dev/null; echo NET_OK"));
         addGlassButton(panelRight, "清理缓存", v -> quick("sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; echo CACHE_OK"));
         addGlassButton(panelRight, "还原原厂", v -> {
-            String r = Scheduler.revert();
-            toast("已还原：" + r);
-            refreshStatus();
+            pool.execute(() -> {
+                String r = Scheduler.revert();
+                h.post(() -> { toast("已还原：" + r); refreshStatusAsync(); });
+            });
         });
-        addGlassButton(panelRight, "开机自启", v -> {
+        addGlassButton(panelRight, "开机自启", v -> pool.execute(() -> {
             String r = Scheduler.installBoot(currentMode);
-            toast("开机自启：" + r);
-        });
-        addGlassButton(panelRight, "关闭自启", v -> {
+            h.post(() -> toast("开机自启：" + r));
+        }));
+        addGlassButton(panelRight, "关闭自启", v -> pool.execute(() -> {
             String r = Scheduler.uninstallBoot();
-            toast(r);
-        });
+            h.post(() -> toast(r));
+        }));
 
         addPanelTitle(panelRight, "背景设置");
         addGlassButton(panelRight, "动态玻璃背景", v -> {
@@ -202,7 +196,7 @@ public class MainActivity extends Activity {
         private final Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final int[] colors = {0xFF0F1B2D, 0xFF2A2F6B, 0xFF1E4C7A, 0xFF3A2D6B};
         private float phase = 0f;
-        private final int N = 60;
+        private final int N = 40;
         private final float[] dx = new float[N], dy = new float[N], dv = new float[N];
         private boolean particlesEnabled = true;
 
@@ -250,7 +244,7 @@ public class MainActivity extends Activity {
                 }
             }
             phase += 0.012f;
-            postInvalidateDelayed(20);
+            if (getVisibility() == View.VISIBLE) postInvalidateDelayed(40);
         }
     }
 
@@ -294,10 +288,14 @@ public class MainActivity extends Activity {
     private void addModeButton(LinearLayout parent, String name, int mode, int accent) {
         Button b = makeBtn(name, accent, v -> {
             currentMode = mode;
-            Scheduler.apply(mode);
-            sp.edit().putInt("last_mode", mode).apply();
-            toast(name + " 已应用");
-            refreshStatus();
+            pool.execute(() -> {
+                Scheduler.apply(mode);
+                h.post(() -> {
+                    sp.edit().putInt("last_mode", mode).apply();
+                    toast(name + " 已应用");
+                    refreshStatusAsync();
+                });
+            });
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.bottomMargin = dp(10);
@@ -312,9 +310,13 @@ public class MainActivity extends Activity {
     }
 
     private void quick(String cmd) {
-        String r = Scheduler.run(cmd);
-        toast(r.length() > 60 ? r.substring(0, 60) + "..." : r);
-        refreshStatus();
+        pool.execute(() -> {
+            String r = Scheduler.run(cmd);
+            h.post(() -> {
+                toast(r.length() > 60 ? r.substring(0, 60) + "..." : r);
+                refreshStatusAsync();
+            });
+        });
     }
 
     private void pickWallpaper() {
@@ -339,29 +341,48 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void refreshStatus() {
-        h.post(() -> {
-            try {
-                String vol = Scheduler.run("media volume --stream 3 --get 2>&1 | tail -1");
-                String online = Scheduler.run("cat /sys/devices/system/cpu/online");
-                String bmax = Scheduler.run("cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq 2>/dev/null");
-                String bcur = Scheduler.run("cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq 2>/dev/null");
-                String smax = Scheduler.run("cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null");
-                String therm = Scheduler.run("cat /sys/class/thermal/thermal_zone1/temp 2>/dev/null");
-                String bat = Scheduler.run("dumpsys battery | grep -E 'level|temperature' | tr ' ' '-'");
-
-                StringBuilder sb = new StringBuilder();
-                sb.append("▪ 音量：").append(vol.replace("[v] ", "")).append(NL);
-                sb.append("▪ 在线核心：").append(online).append(NL);
-                sb.append("▪ 大核 频率：").append(khz(bcur)).append(" / 上限 ").append(khz(bmax)).append(NL);
-                sb.append("▪ 小核 上限：").append(khz(smax)).append(NL);
-                sb.append("▪ CPU 温度：").append(temp(therm)).append(NL);
-                sb.append("▪ 电池：").append(bat.replace(" ", "  "));
-                statusText.setText(sb.toString());
-            } catch (Exception e) {
-                statusText.setText("读取失败：" + e.getMessage());
-            }
+    private void refreshStatusAsync() {
+        if (refreshing) return;
+        refreshing = true;
+        pool.execute(() -> {
+            String out = Scheduler.run(
+                "echo V=$(media volume --stream 3 --get 2>&1 | tail -1)" +
+                "; echo O=$(cat /sys/devices/system/cpu/online)" +
+                "; echo BMAX=$(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_max_freq 2>/dev/null)" +
+                "; echo BCUR=$(cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq 2>/dev/null)" +
+                "; echo SMAX=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null)" +
+                "; echo T=$(cat /sys/class/thermal/thermal_zone1/temp 2>/dev/null)" +
+                "; echo BAT=$(dumpsys battery | grep -E 'level|temperature' | tr ' ' '-')"
+            );
+            h.post(() -> { renderStatus(out); refreshing = false; });
         });
+    }
+
+    private void renderStatus(String raw) {
+        String v="", o="", bmax="", bcur="", smax="", t="", bat="";
+        for (String line : raw.split(NL)) {
+            int eq = line.indexOf('=');
+            if (eq <= 0) continue;
+            String k = line.substring(0, eq).trim();
+            String val = line.substring(eq + 1).trim();
+            switch (k) {
+                case "V": v = val.replace("[v] ", ""); break;
+                case "O": o = val; break;
+                case "BMAX": bmax = val; break;
+                case "BCUR": bcur = val; break;
+                case "SMAX": smax = val; break;
+                case "T": t = val; break;
+                case "BAT": bat = val; break;
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("▪ 音量：").append(v).append(NL);
+        sb.append("▪ 在线核心：").append(o).append(NL);
+        sb.append("▪ 大核 频率：").append(khz(bcur)).append(" / 上限 ").append(khz(bmax)).append(NL);
+        sb.append("▪ 小核 上限：").append(khz(smax)).append(NL);
+        sb.append("▪ CPU 温度：").append(temp(t)).append(NL);
+        sb.append("▪ 电池：").append(bat.replace("-", "  "));
+        statusText.setText(sb.toString());
     }
 
     private String khz(String s) {
@@ -406,13 +427,8 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
-    }
-
-    private int dp(float v) {
-        return Math.round(v * getResources().getDisplayMetrics().density);
-    }
+    private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
+    private int dp(float v) { return Math.round(v * getResources().getDisplayMetrics().density); }
 
     @Override
     protected void onResume() {
@@ -428,6 +444,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         h.removeCallbacksAndMessages(null);
+        pool.shutdownNow();
         super.onDestroy();
     }
 }
