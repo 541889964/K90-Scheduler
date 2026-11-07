@@ -14,9 +14,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
-import android.view.Gravity;
 import android.view.View;
-import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
@@ -27,13 +25,10 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
-/**
- * K90 调度器 - 液态玻璃 UI / 横屏平板&手机双布局 / 动态&静态背景
- * 横屏触发“平板模式”（左右分栏）；竖屏为“手机模式”（上下堆叠）。
- */
 public class MainActivity extends Activity {
 
     private static final int REQ_WALLPAPER = 1001;
+    private static final String NL = String.valueOf((char) 10);
 
     private FrameLayout root;
     private DynamicBgView bgView;
@@ -41,9 +36,11 @@ public class MainActivity extends Activity {
     private TextView statusText;
     private TextView titleView;
     private LinearLayout panelLeft, panelRight;
+    private LinearLayout columns;
     private LinearLayout glassContainer;
 
     private boolean isTabletMode = false;
+    private int currentMode = Scheduler.MODE_BALANCE;
 
     private final Handler h = new Handler(Looper.getMainLooper());
     private Runnable ticker;
@@ -62,7 +59,6 @@ public class MainActivity extends Activity {
         root = new FrameLayout(this);
         setContentView(root);
 
-        // 1) 背景层
         staticWallpaper = new ImageView(this);
         staticWallpaper.setScaleType(ImageView.ScaleType.CENTER_CROP);
         staticWallpaper.setVisibility(View.GONE);
@@ -71,10 +67,8 @@ public class MainActivity extends Activity {
         bgView = new DynamicBgView();
         root.addView(bgView, new FrameLayout.LayoutParams(-1, -1));
 
-        // 2) 内容层
         buildUi();
 
-        // 状态刷新
         ticker = new Runnable() {
             @Override public void run() {
                 refreshStatus();
@@ -83,7 +77,6 @@ public class MainActivity extends Activity {
         };
         h.post(ticker);
 
-        // 恢复背景设置
         String mode = sp.getString("bg_mode", "dynamic");
         if ("static".equals(mode)) {
             String uri = sp.getString("bg_static_uri", null);
@@ -97,24 +90,21 @@ public class MainActivity extends Activity {
         }
 
         if (!Scheduler.isRoot()) {
-            Toast.makeText(this, "⚠ 需要 Root 权限才能应用调度", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "需要 Root 权限才能应用调度", Toast.LENGTH_LONG).show();
         }
     }
 
     private void buildUi() {
-        // 外层：滚动容器
         ScrollView sc = new ScrollView(this);
         sc.setFillViewport(true);
         sc.setVerticalScrollBarEnabled(false);
-        FrameLayout.LayoutParams scLp = new FrameLayout.LayoutParams(-1, -1);
-        root.addView(sc, scLp);
+        root.addView(sc, new FrameLayout.LayoutParams(-1, -1));
 
         glassContainer = new LinearLayout(this);
         glassContainer.setOrientation(LinearLayout.VERTICAL);
         glassContainer.setPadding(dp(20), dp(40), dp(20), dp(24));
         sc.addView(glassContainer, new LinearLayout.LayoutParams(-1, -2));
 
-        // 标题
         titleView = new TextView(this);
         titleView.setText("K90 调度器");
         titleView.setTextColor(Color.WHITE);
@@ -124,7 +114,7 @@ public class MainActivity extends Activity {
         glassContainer.addView(titleView);
 
         TextView sub = new TextView(this);
-        sub.setText("MT6755 · 4+4 双簇 · Liquid Glass");
+        sub.setText("MT6755 | 4+4 双簇 | Liquid Glass");
         sub.setTextColor(0xCCFFFFFF);
         sub.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
         sub.setShadowLayer(8, 0, 1, 0x99000000);
@@ -133,7 +123,6 @@ public class MainActivity extends Activity {
         subLp.bottomMargin = dp(16);
         glassContainer.addView(sub, subLp);
 
-        // 状态卡片（玻璃）
         statusText = new TextView(this);
         statusText.setTextColor(Color.WHITE);
         statusText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
@@ -146,8 +135,7 @@ public class MainActivity extends Activity {
         stLp.bottomMargin = dp(20);
         glassContainer.addView(statusText, stLp);
 
-        // 双栏容器（用于响应式布局）
-        LinearLayout columns = new LinearLayout(this);
+        columns = new LinearLayout(this);
         columns.setOrientation(LinearLayout.HORIZONTAL);
         glassContainer.addView(columns, new LinearLayout.LayoutParams(-1, -2));
 
@@ -162,43 +150,39 @@ public class MainActivity extends Activity {
         colLp.leftMargin = dp(16);
         columns.addView(panelRight, colLp);
 
-        // 左栏：四个模式按钮
         addPanelTitle(panelLeft, "调度模式");
         addModeButton(panelLeft, "均衡", Scheduler.MODE_BALANCE, 0xFF4FC3F7);
         addModeButton(panelLeft, "性能", Scheduler.MODE_PERF,    0xFFFFA726);
         addModeButton(panelLeft, "游戏", Scheduler.MODE_GAME,    0xFFEF5350);
         addModeButton(panelLeft, "省电", Scheduler.MODE_SAVE,    0xFF66BB6A);
 
-        // 右栏：快捷工具
         addPanelTitle(panelRight, "快捷工具");
-        addGlassButton(panelRight, "🔊 音量拉满", v -> quick("media volume --stream 3 --set 15; settings put system volume_music 15; echo VOL_OK"));
-        addGlassButton(panelRight, "📶 刷新网络", v -> quick("echo 1 > /proc/sys/net/ipv4/tcp_fastopen 2>/dev/null; echo NET_OK"));
-        addGlassButton(panelRight, "🧹 清理缓存", v -> quick("sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; echo CACHE_OK"));
-        addGlassButton(panelRight, "🔁 还原原厂", v -> {
+        addGlassButton(panelRight, "音量拉满", v -> quick("media volume --stream 3 --set 15; settings put system volume_music 15; echo VOL_OK"));
+        addGlassButton(panelRight, "刷新网络", v -> quick("echo 1 > /proc/sys/net/ipv4/tcp_fastopen 2>/dev/null; echo NET_OK"));
+        addGlassButton(panelRight, "清理缓存", v -> quick("sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null; echo CACHE_OK"));
+        addGlassButton(panelRight, "还原原厂", v -> {
             String r = Scheduler.revert();
             toast("已还原：" + r);
             refreshStatus();
         });
-        addGlassButton(panelRight, "⏱ 开机自启", v -> {
+        addGlassButton(panelRight, "开机自启", v -> {
             String r = Scheduler.installBoot(currentMode);
             toast("开机自启：" + r);
         });
-        addGlassButton(panelRight, "🚫 关闭自启", v -> {
+        addGlassButton(panelRight, "关闭自启", v -> {
             String r = Scheduler.uninstallBoot();
             toast(r);
         });
 
-        // 背景设置
         addPanelTitle(panelRight, "背景设置");
-        addGlassButton(panelRight, "🎨 动态玻璃背景", v -> {
+        addGlassButton(panelRight, "动态玻璃背景", v -> {
             sp.edit().putString("bg_mode", "dynamic").apply();
             staticWallpaper.setVisibility(View.GONE);
             bgView.setVisibility(View.VISIBLE);
             toast("动态背景已启用");
         });
-        addGlassButton(panelRight, "🖼 选择静态图片", v -> pickWallpaper());
+        addGlassButton(panelRight, "选择静态图片", v -> pickWallpaper());
 
-        // 底部开关
         Switch sw = new Switch(this);
         sw.setText("性能动画（粒子流光）");
         sw.setTextColor(Color.WHITE);
@@ -213,7 +197,6 @@ public class MainActivity extends Activity {
         glassContainer.addView(sw, swLp);
     }
 
-    // ===== 动态玻璃背景 =====
     private class DynamicBgView extends View {
         private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint dot = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -240,7 +223,6 @@ public class MainActivity extends Activity {
         protected void onDraw(Canvas c) {
             super.onDraw(c);
             int w = getWidth(), hh = getHeight();
-            // 旋转渐变
             float angle = phase * 0.25f;
             float cx = w * 0.5f + (float)Math.cos(angle) * w * 0.35f;
             float cy = hh * 0.5f + (float)Math.sin(angle) * hh * 0.35f;
@@ -248,7 +230,6 @@ public class MainActivity extends Activity {
             p.setShader(sh);
             c.drawRect(0, 0, w, hh, p);
 
-            // 光斑
             for (int k = 0; k < 3; k++) {
                 float ox = w * (0.25f + 0.25f * k) + (float)Math.cos(phase + k * 1.7f) * w * 0.25f;
                 float oy = hh * (0.4f + 0.15f * k) + (float)Math.sin(phase * 0.7f + k) * hh * 0.25f;
@@ -273,7 +254,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ===== 玻璃视觉素材 =====
     private GradientDrawable makeGlassBg(int color, int radiusDp) {
         GradientDrawable g = new GradientDrawable();
         g.setColor(color);
@@ -282,7 +262,7 @@ public class MainActivity extends Activity {
         return g;
     }
 
-    private Button makeBtn(String text, int color, android.view.View.OnClickListener l) {
+    private Button makeBtn(String text, int color, View.OnClickListener l) {
         Button b = new Button(this);
         b.setText(text);
         b.setAllCaps(false);
@@ -311,12 +291,11 @@ public class MainActivity extends Activity {
         parent.addView(v, lp);
     }
 
-    private int currentMode = Scheduler.MODE_BALANCE;
-
     private void addModeButton(LinearLayout parent, String name, int mode, int accent) {
         Button b = makeBtn(name, accent, v -> {
             currentMode = mode;
-            String out = Scheduler.apply(mode);
+            Scheduler.apply(mode);
+            sp.edit().putInt("last_mode", mode).apply();
             toast(name + " 已应用");
             refreshStatus();
         });
@@ -325,7 +304,7 @@ public class MainActivity extends Activity {
         parent.addView(b, lp);
     }
 
-    private void addGlassButton(LinearLayout parent, String text, android.view.View.OnClickListener l) {
+    private void addGlassButton(LinearLayout parent, String text, View.OnClickListener l) {
         Button b = makeBtn(text, 0x33FFFFFF, l);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.bottomMargin = dp(10);
@@ -334,7 +313,7 @@ public class MainActivity extends Activity {
 
     private void quick(String cmd) {
         String r = Scheduler.run(cmd);
-        toast(r.length() > 60 ? r.substring(0, 60) + "…" : r);
+        toast(r.length() > 60 ? r.substring(0, 60) + "..." : r);
         refreshStatus();
     }
 
@@ -361,7 +340,6 @@ public class MainActivity extends Activity {
     }
 
     private void refreshStatus() {
-        Scheduler.run("true"); // ensure shell ready
         h.post(() -> {
             try {
                 String vol = Scheduler.run("media volume --stream 3 --get 2>&1 | tail -1");
@@ -370,20 +348,14 @@ public class MainActivity extends Activity {
                 String bcur = Scheduler.run("cat /sys/devices/system/cpu/cpu4/cpufreq/scaling_cur_freq 2>/dev/null");
                 String smax = Scheduler.run("cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null");
                 String therm = Scheduler.run("cat /sys/class/thermal/thermal_zone1/temp 2>/dev/null");
-                String bat = Scheduler.run("dumpsys battery | grep -E 'level|temperature' | tr '\
-' ' '");
+                String bat = Scheduler.run("dumpsys battery | grep -E 'level|temperature' | tr ' ' '-'");
 
                 StringBuilder sb = new StringBuilder();
-                sb.append("▪ 音量：").append(vol.replace("[v] ", "")).append("
-");
-                sb.append("▪ 在线核心：").append(online).append("
-");
-                sb.append("▪ 大核 频率：").append(khz(bcur)).append(" / 上限 ").append(khz(bmax)).append("
-");
-                sb.append("▪ 小核 上限：").append(khz(smax)).append("
-");
-                sb.append("▪ CPU 温度：").append(temp(therm)).append("
-");
+                sb.append("▪ 音量：").append(vol.replace("[v] ", "")).append(NL);
+                sb.append("▪ 在线核心：").append(online).append(NL);
+                sb.append("▪ 大核 频率：").append(khz(bcur)).append(" / 上限 ").append(khz(bmax)).append(NL);
+                sb.append("▪ 小核 上限：").append(khz(smax)).append(NL);
+                sb.append("▪ CPU 温度：").append(temp(therm)).append(NL);
                 sb.append("▪ 电池：").append(bat.replace(" ", "  "));
                 statusText.setText(sb.toString());
             } catch (Exception e) {
@@ -398,7 +370,7 @@ public class MainActivity extends Activity {
     }
 
     private String temp(String s) {
-        try { float v = Float.parseFloat(s.trim()); return String.format("%.1f°C", v / 1000f); }
+        try { float v = Float.parseFloat(s.trim()); return String.format("%.1fC", v / 1000f); }
         catch (Exception e) { return "-"; }
     }
 
@@ -414,20 +386,23 @@ public class MainActivity extends Activity {
 
     private void updateLayoutMode() {
         if (isTabletMode) {
-            titleView.setText("K90 调度器 · 平板模式");
+            titleView.setText("K90 调度器 | 平板模式");
+            columns.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout.LayoutParams lp1 = (LinearLayout.LayoutParams) panelLeft.getLayoutParams();
+            lp1.width = 0; lp1.weight = 1f; lp1.topMargin = 0;
+            panelLeft.setLayoutParams(lp1);
+            LinearLayout.LayoutParams lp2 = (LinearLayout.LayoutParams) panelRight.getLayoutParams();
+            lp2.width = 0; lp2.weight = 1f; lp2.topMargin = 0; lp2.leftMargin = dp(16);
+            panelRight.setLayoutParams(lp2);
         } else {
             titleView.setText("K90 调度器");
-            // 手机模式：左右栏改成上下堆叠
-            LinearLayout colParent = (LinearLayout) panelLeft.getParent();
-            if (colParent != null && colParent.getOrientation() == LinearLayout.HORIZONTAL) {
-                colParent.setOrientation(LinearLayout.VERTICAL);
-                LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) panelRight.getLayoutParams();
-                lp.width = -1; lp.weight = 0; lp.leftMargin = 0; lp.topMargin = dp(16);
-                panelRight.setLayoutParams(lp);
-                LinearLayout.LayoutParams lp1 = (LinearLayout.LayoutParams) panelLeft.getLayoutParams();
-                lp1.width = -1; lp1.weight = 0;
-                panelLeft.setLayoutParams(lp1);
-            }
+            columns.setOrientation(LinearLayout.VERTICAL);
+            LinearLayout.LayoutParams lp1 = (LinearLayout.LayoutParams) panelLeft.getLayoutParams();
+            lp1.width = -1; lp1.weight = 0;
+            panelLeft.setLayoutParams(lp1);
+            LinearLayout.LayoutParams lp2 = (LinearLayout.LayoutParams) panelRight.getLayoutParams();
+            lp2.width = -1; lp2.weight = 0; lp2.leftMargin = 0; lp2.topMargin = dp(16);
+            panelRight.setLayoutParams(lp2);
         }
     }
 
@@ -442,7 +417,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        // 横屏初始检测
         boolean landscape = getResources().getConfiguration().orientation
                 == android.content.res.Configuration.ORIENTATION_LANDSCAPE;
         if (landscape != isTabletMode) {
